@@ -1,6 +1,3 @@
 [submodule "libopencm3"]
 	path = libopencm3
 	url = https://github.com/libopencm3/libopencm3
-[submodule "librfn"]
-	path = librfn
-	url = https://github.com/daniel-thompson/librfn
