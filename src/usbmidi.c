@@ -1,8 +1,11 @@
 /*
- * Copyright (C) 2014 Daniel Thompson <daniel@redfelineninja.org.uk>
- * Copyright (C) 2016 Paul Fertser <fercerpav@gmail.com>
- * Copyright (C) 2010 Gareth McMullin <gareth@blacksphere.co.nz>
  * Copyright (C) 2016 Alexey Bolshakov <ua3mqj@gmail.com>
+ * Copyright (C) 2016 Paul Fertser <fercerpav@gmail.com>
+ * Copyright (C) 2014 Daniel Thompson <daniel@redfelineninja.org.uk>
+ * Copyright (C) 2010 Gareth McMullin <gareth@blacksphere.co.nz>
+ * Copyright (C) 2009 Uwe Hermann <uwe@hermann-uwe.de>
+ * Copyright (C) 2013 Stephen Dwyer <scdwyer@ualberta.ca>
+ * Copyright (C) 2014 Laurent Barattero <laurentba@larueluberlu.net>
  *
  * This library is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -33,6 +36,7 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/pwr.h>
+#include <libopencm3/stm32/spi.h>
 #include <libopencmsis/core_cm3.h>
 
 static usbd_device *usbd_dev;
@@ -347,6 +351,16 @@ static void usbmidi_data_rx_cb(usbd_device *dev, uint8_t ep)
 		}
 		if(note_on) {
 			gpio_clear(GPIOC, GPIO13);
+
+			spi_enable_ss_output(SPI2);
+
+			spi_send(SPI2, (uint8_t) buf[2]);
+
+			while (!(SPI_SR(SPI2) & SPI_SR_TXE));
+
+			while (SPI_SR(SPI2) & SPI_SR_BSY);
+
+			spi_disable_ss_output(SPI2);
 		} else {
 			gpio_set(GPIOC, GPIO13);
 		}
@@ -453,6 +467,49 @@ static void adc_setup(void)
 	adc_calibrate(ADC1);
 }
 
+static void spi_setup(void)
+{
+	rcc_periph_clock_enable(RCC_SPI2);
+	// Configure GPIOs: SS=PB12, SCK=PB13, MISO=PB14 and MOSI=PB15
+  	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
+            	      GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO13 | GPIO15 | GPIO12);
+	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO14);
+  	
+	// Reset SPI, SPI_CR1 register cleared, SPI is disabled
+	spi_reset(SPI2);
+
+	/*
+	https://habrahabr.ru/post/276605/
+	http://chipspace.ru/stm32-spi/
+	https://hubstub.ru/stm32/100-spi-stm32.html
+	*/
+
+	/* Set up SPI in Master mode with:
+	* Clock baud rate: 1/64 of peripheral clock frequency
+	* Clock polarity: Idle low
+	* Clock phase: Data valid on 2nd clock pulse
+	* Data frame format: 8-bit
+	* Frame format: LSB First
+	*/
+
+	//see also SPI_CR1_DFF_16BIT
+	spi_init_master(SPI2, SPI_CR1_BAUDRATE_FPCLK_DIV_64, SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
+			SPI_CR1_CPHA_CLK_TRANSITION_1, SPI_CR1_DFF_8BIT, SPI_CR1_LSBFIRST); 
+
+	/*
+	* Set NSS management to software.
+	*
+	* Note:
+	* Setting nss high is very important, even if we are controlling the GPIO
+	* ourselves this bit needs to be at least set to 1, otherwise the spi
+	* peripheral will not send any data out.
+	*/
+	spi_enable_software_slave_management(SPI2);
+	spi_set_nss_high(SPI2);
+
+	/* Enable SPI2 periph. */
+	spi_enable(SPI2);
+}
 
 void sys_tick_handler(void)
 {
@@ -522,6 +579,7 @@ int main(void)
 
 
 	adc_setup();
+	spi_setup();
 
 
 	while (1) {
