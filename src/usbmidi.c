@@ -39,6 +39,9 @@
 #include <libopencm3/stm32/spi.h>
 #include <libopencmsis/core_cm3.h>
 
+#include "hd44780.h"
+#include "usbmidi.h"
+
 static usbd_device *usbd_dev;
 
 /*
@@ -550,9 +553,18 @@ void sys_tick_handler(void)
 
 }
 
+
+void delay_ms(uint32_t delay)
+{
+    uint32_t cycles = (delay * 72000)/5;  // 8 Mhz, CMP+BEQ+NOP+ADDS+B
+    uint32_t i = 0;
+    while(i++ < cycles) {
+        __asm__("nop");
+    }
+}
+
 int main(void)
 {
-	//usbd_device *usbd_dev;
 
 	rcc_clock_setup_in_hse_8mhz_out_72mhz();
 
@@ -563,6 +575,32 @@ int main(void)
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
 
 	gpio_set(GPIOC, GPIO13); // led off
+
+
+	// We are using a 16x2 LCD, second line starting on address 0x40.
+	// These settings are optional but enable smart functions.
+	lcd_chars = 16;
+	lcd_lines = 2;
+	uint8_t addresses[] = {0x40};
+	lcd_line_addresses = addresses;
+
+	// Initial stuff
+	lcd_setup();
+	lcd_reset();
+	lcd_display_settings(1, 1, 1);
+
+	delay_ms(1000);
+
+        lcd_clear();
+        //lcd_write('A', 1);
+        //lcd_write('B', 1);
+        //lcd_write('C', 1);
+        //lcd_display_address(0x40);
+        //lcd_print("stm32-hd44780");
+	//delay_ms(3000);
+        lcd_clear();
+	lcd_print("((Vita-Sound))\nUSB-MIDI-Ctrl");
+	delay_ms(3000);
 
 	// parallel debug out
 	//gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
@@ -578,12 +616,13 @@ int main(void)
 	usbd_register_set_config_callback(usbd_dev, usbmidi_set_config);
 
 
-	adc_setup();
-	spi_setup();
+	if(false) adc_setup();
+	if(false) spi_setup();
+
 
 
 	while (1) {
-		usbd_poll(usbd_dev);
-		button_poll(usbd_dev);	
+		if(false) usbd_poll(usbd_dev);
+		if(false) button_poll(usbd_dev);	
 	}
 }
