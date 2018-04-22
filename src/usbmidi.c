@@ -277,7 +277,7 @@ static const struct usb_config_descriptor config = {
 	.bNumInterfaces = 2, /* control and data */
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
-	.bmAttributes = 0x80, /* bus powered */
+	.bmAttributes = 0xC0, /* self powered + bus powered */
 	.bMaxPower = 0x32,
 
 	.interface = ifaces,
@@ -584,6 +584,6 @@ int main(void)
 
 	while (1) {
 		usbd_poll(usbd_dev);
-		button_poll(usbd_dev);	
+		button_poll(usbd_dev);
 	}
 }

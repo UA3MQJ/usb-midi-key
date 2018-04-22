@@ -261,16 +261,8 @@ int main(void)
 
 	rcc_clock_setup_in_hsi_out_48mhz();
 
-//	rcc_periph_clock_enable(RCC_GPIOC);
-
-//	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_50_MHZ,
-//		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO11);
-//	gpio_set(GPIOC, GPIO11);
-
 	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &dev, &config, usb_strings, 4, usbd_control_buffer, sizeof(usbd_control_buffer));
 	usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
-
-//	gpio_clear(GPIOC, GPIO11);
 
 	while (1)
 		usbd_poll(usbd_dev);
