@@ -57,8 +57,8 @@ static const struct usb_device_descriptor dev_descr = {
 	.bDeviceSubClass = 0,
 	.bDeviceProtocol = 0,
 	.bMaxPacketSize0 = 64,
-	.idVendor = 0x6666,  /* Prototype product vendor ID */
-	.idProduct = 0x5119, /* dd if=/dev/random bs=2 count=1 | hexdump */
+	.idVendor = 0x1d50,  /* MIDI Key Vita sound Vid/Pid  */
+	.idProduct = 0x6114, /* from Openmoko */
 	.bcdDevice = 0x0100,
 	.iManufacturer = 1,  /* index to string desc */
 	.iProduct = 2,       /* index to string desc */
@@ -278,7 +278,7 @@ static const struct usb_config_descriptor config = {
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
 	.bmAttributes = 0xC0, /* self powered + bus powered */
-	.bMaxPower = 0x32,
+	.bMaxPower = 0x20,
 
 	.interface = ifaces,
 };
