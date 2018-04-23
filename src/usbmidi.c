@@ -21,7 +21,9 @@
  * along with this library.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/audio.h>
 #include <libopencm3/usb/midi.h>
@@ -39,7 +41,6 @@
 #include <libopencm3/stm32/spi.h>
 #include <libopencmsis/core_cm3.h>
 
-static usbd_device *usbd_dev;
 
 /*
  * All references in this file come from Universal Serial Bus Device Class
@@ -278,7 +279,7 @@ static const struct usb_config_descriptor config = {
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
 	.bmAttributes = 0xC0, /* self powered + bus powered */
-	.bMaxPower = 0x20,
+	.bMaxPower = 0x32,
 
 	.interface = ifaces,
 };
@@ -291,6 +292,11 @@ static const char * usb_strings[] = {
 
 /* Buffer to be used for control requests. */
 uint8_t usbd_control_buffer[128];
+
+/* SysEx BOOTLOAD message, preformatted with correct USB framing information */
+const uint8_t bootload_message[] = {
+  0x04, 0xf0, 0x60, 0x07, 0x07, 0x10, 0x4d, 0xf7
+};
 
 /* SysEx identity message, preformatted with correct USB framing information */
 const uint8_t sysex_identity[] = {
@@ -316,274 +322,59 @@ const uint8_t sysex_identity[] = {
 	0x00,	/* Padding */
 };
 
-static void usbmidi_data_rx_cb(usbd_device *dev, uint8_t ep)
+static void jump_to_bootloader(void)
 {
-	(void)ep;
+  char * const marker = (char *)0x20004800; /* RAM@18K */
+  const char key[] = "remain-in-loader";
 
-	static bool keys[128] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+  memcpy(marker, key, sizeof(key));
+  scb_reset_system(); /* Will never return. */
+}
 
-	char buf[64];
-	int len = usbd_ep_read_packet(dev, 0x01, buf, 64);
+static void usbmidi_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
+{
+  (void)ep;
 
-	/* This implementation treats any message from the host as a SysEx
-	 * identity request. This works well enough providing the host
-	 * packs the identify request in a single 8 byte USB message.
-	 */
-	/* if (len) {
-		while (usbd_ep_write_packet(dev, 0x81, sysex_identity,
-					    sizeof(sysex_identity)) == 0);
-	} */
+  char buf[64];
+  int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
 
-	if (len) {
-		if(buf[0]==0x09) {
-			//note on
-			keys[(uint8_t)(buf[2])] = 1;
-		} else if(buf[0]==0x08) {
-			//note off
-			keys[(uint8_t)(buf[2])] = 0;
-		}
-		
-		bool note_on = false;
-		for (unsigned int i = 0; i < 128; i++) {
-			if(keys[i] == 1) {
-				note_on = true;
-			}
-		}
-		if(note_on) {
-			gpio_clear(GPIOC, GPIO13);
+  /* This implementation treats any message from the host as a SysEx
+   * identity request. This works well enough providing the host
+   * packs the identify request in a single 8 byte USB message.
+   */
+  if (len) {
+    if (0 ==
+        memcmp(buf, bootload_message, sizeof(bootload_message))) {
+      jump_to_bootloader();
+    }
 
-			spi_enable_ss_output(SPI2);
-
-			spi_send(SPI2, (uint8_t) buf[2]);
-
-			while (!(SPI_SR(SPI2) & SPI_SR_TXE));
-
-			while (SPI_SR(SPI2) & SPI_SR_BSY);
-
-			spi_disable_ss_output(SPI2);
-		} else {
-			gpio_set(GPIOC, GPIO13);
-		}
-	}
+    while (usbd_ep_write_packet(usbd_dev, 0x81, sysex_identity,
+              sizeof(sysex_identity)) == 0);
+  }
 }
 
 static void usbmidi_set_config(usbd_device *dev, uint16_t wValue)
 {
 	(void)wValue;
 
-	usbd_ep_setup(dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64,
-			usbmidi_data_rx_cb);
+	usbd_ep_setup(dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usbmidi_data_rx_cb);
 	usbd_ep_setup(dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, NULL);
-
-	//systick init
-	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
-	// SysTick interrupt every N clock pulses: set reload to N-1
-	systick_set_reload(99999);
-	systick_interrupt_enable();
-	systick_counter_enable();
-}
-
-static void button_send_event(usbd_device *dev, int pressed)
-{
-	char buf[4] = { 0x08, /* USB framing: virtual cable 0, note on */
-			0x80, /* MIDI command: note on, channel 1 */
-			60,   /* Note 60 (middle C) */
-			64,   /* "Normal" velocity */
-	};
-
-	buf[0] |= pressed;
-	buf[1] |= pressed << 4;
-
-	while (usbd_ep_write_packet(dev, 0x81, buf, sizeof(buf)) == 0);
-}
-
-static void pot_send_event(uint8_t pot_num, uint8_t pot_value)
-{
-	static uint8_t last_sent_pot_value = 0;	
-	static uint8_t pot_buf[16];
-	static uint8_t pot_buf_ptr = 0;
-
-	pot_buf[pot_buf_ptr] = pot_value;
-	pot_buf_ptr = (pot_buf_ptr==15) ? 0 : pot_buf_ptr + 1;
-
-	uint16_t avg_pot_value = 0;
-
-	for (unsigned int i = 0; i < 16; i++) {
-		avg_pot_value += pot_buf[i];
-	}
-
-	if(last_sent_pot_value != (avg_pot_value/16) ) {
-		last_sent_pot_value = (avg_pot_value/16);
-
-		char buf[4] = { 0x03, /* USB framing: virtual cable 0, three byte System Common Message*/
-				0b10110000, /* MIDI command: Control Change, channel 0 */
-				16+pot_num,   /* CC number */
-				last_sent_pot_value,   /* CC value */
-		};
-
-		while (usbd_ep_write_packet(usbd_dev, 0x81, buf, sizeof(buf)) == 0);
-	}
-}
-
-static void button_poll(usbd_device *dev)
-{
-	static uint32_t button_state = 0;
-
-	/* This is a simple shift based debounce. It's simplistic because
-	 * although this implements debounce adequately it does not have any
-	 * noise suppression. It is also very wide (32-bits) because it can
-	 * be polled in a very tight loop (no debounce timer).
-	 */
-	uint32_t old_button_state = button_state;
-	button_state = (button_state << 1) | (GPIOB_IDR & GPIO0);
-	if ((0 == button_state) != (0 == old_button_state)) {
-		button_send_event(dev, !!button_state);
-	}
-}
-
-static void adc_setup(void)
-{
-	rcc_periph_clock_enable(RCC_GPIOA);	
-	rcc_periph_clock_enable(RCC_ADC1);
-
-	// Make sure the ADC doesn't run during config.
-	adc_power_off(ADC1);
-	
-	// We configure everything for one single conversion.
-	adc_disable_scan_mode(ADC1);
-	adc_set_single_conversion_mode(ADC1);
-	adc_disable_external_trigger_regular(ADC1);
-	adc_set_right_aligned(ADC1);
-	//adc_enable_temperature_sensor();
-	adc_set_sample_time_on_all_channels(ADC1, ADC_SMPR_SMP_28DOT5CYC);
-	
-	adc_power_on(ADC1);
-
-	// Wait for ADC starting up.
-	for (unsigned int i = 0; i < 800000; i++) // Wait a bit
-		__asm__("nop");
-
-	adc_reset_calibration(ADC1);
-	adc_calibrate(ADC1);
-}
-
-static void spi_setup(void)
-{
-	rcc_periph_clock_enable(RCC_SPI2);
-	// Configure GPIOs: SS=PB12, SCK=PB13, MISO=PB14 and MOSI=PB15
-  	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
-            	      GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO13 | GPIO15 | GPIO12);
-	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO14);
-  	
-	// Reset SPI, SPI_CR1 register cleared, SPI is disabled
-	spi_reset(SPI2);
-
-	/*
-	https://habrahabr.ru/post/276605/
-	http://chipspace.ru/stm32-spi/
-	https://hubstub.ru/stm32/100-spi-stm32.html
-	*/
-
-	/* Set up SPI in Master mode with:
-	* Clock baud rate: 1/64 of peripheral clock frequency
-	* Clock polarity: Idle low
-	* Clock phase: Data valid on 2nd clock pulse
-	* Data frame format: 8-bit
-	* Frame format: LSB First
-	*/
-
-	//see also SPI_CR1_DFF_16BIT
-	spi_init_master(SPI2, SPI_CR1_BAUDRATE_FPCLK_DIV_64, SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
-			SPI_CR1_CPHA_CLK_TRANSITION_1, SPI_CR1_DFF_8BIT, SPI_CR1_LSBFIRST); 
-
-	/*
-	* Set NSS management to software.
-	*
-	* Note:
-	* Setting nss high is very important, even if we are controlling the GPIO
-	* ourselves this bit needs to be at least set to 1, otherwise the spi
-	* peripheral will not send any data out.
-	*/
-	spi_enable_software_slave_management(SPI2);
-	spi_set_nss_high(SPI2);
-
-	/* Enable SPI2 periph. */
-	spi_enable(SPI2);
-}
-
-void sys_tick_handler(void)
-{
-	
-/* //multichannel read
-	static uint8_t buf[1 + 16];
-	static uint8_t channels[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
-
-	for (unsigned int i = 0; i < 8; i++) {
-		uint8_t channel_array[] = { channels[i] };
-		adc_set_regular_sequence(ADC1, 1, channel_array);
-		adc_start_conversion_direct(ADC1);
-		// Wait for end of conversion.
-		while (!(adc_eoc(ADC1)))
-			;
-
-		uint16_t res = adc_read_regular(ADC1);
-
-		// work with i - res
-	}
-
-*/
-	
-	uint8_t channel_array[16];
-	uint16_t pot_value = 0;
-
-	channel_array[0] = 0;
-	adc_set_regular_sequence(ADC1, 1, channel_array);
-
-	adc_start_conversion_direct(ADC1);
-	while (!(adc_eoc(ADC1)));
-	pot_value = adc_read_regular(ADC1);
-
-	//parallel debug out
-	//gpio_port_write(GPIOB, (pot_value >> 4) << 8);
-
-	pot_send_event(0, pot_value >> 5); // pot 0, value 0..127
-
 }
 
 int main(void)
 {
-	//usbd_device *usbd_dev;
+	usbd_device *usbd_dev;
 
 	rcc_clock_setup_in_hse_8mhz_out_72mhz();
 
-	rcc_periph_clock_enable(RCC_GPIOC);
-	rcc_periph_clock_enable(RCC_GPIOB);
-
-	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_50_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
-
-	gpio_set(GPIOC, GPIO13); // led off
-
-	// parallel debug out
-	//gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
-	//	      GPIO_CNF_OUTPUT_PUSHPULL, GPIO8|GPIO9|GPIO10|GPIO11|GPIO12|GPIO13|GPIO14|GPIO15);
-
-	// button pin
-	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO0);
-
 	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &dev_descr, &config,
-			usb_strings, 3,
-			usbd_control_buffer, sizeof(usbd_control_buffer));
+											 usb_strings, 3,
+			                 usbd_control_buffer, sizeof(usbd_control_buffer));
 
 	usbd_register_set_config_callback(usbd_dev, usbmidi_set_config);
 
 
-	adc_setup();
-	spi_setup();
-
-
 	while (1) {
 		usbd_poll(usbd_dev);
-		button_poll(usbd_dev);
 	}
 }
