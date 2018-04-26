@@ -19,6 +19,8 @@
 
 BINARY = usbdfu
 CSTD = -std=gnu99
+SRCS = $(filter-out $(BINARY).c,$(wildcard *.c))
+OBJS = $(subst .c,.o,$(SRCS))
 
 OPENCM3_DIR = ../libopencm3
 

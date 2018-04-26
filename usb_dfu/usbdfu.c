@@ -25,6 +25,9 @@
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/dfu.h>
 
+#include "hd44780.h"
+#include "usbdfu.h"
+
 #define APP_ADDRESS	0x08002000
 
 /* Commands sent with wBlockNum == 0 as per ST implementation. */
@@ -240,11 +243,21 @@ static void usbdfu_set_config(usbd_device *usbd_dev, uint16_t wValue)
 				usbdfu_control_request);
 }
 
+void delay_ms(uint32_t delay)
+{
+    uint32_t cycles = (delay * 48000)/5;  // 48 Mhz, CMP+BEQ+NOP+ADDS+B
+    uint32_t i = 0;
+    while(i++ < cycles) {
+        __asm__("nop");
+    }
+}
+
 int main(void)
 {
 	usbd_device *usbd_dev;
 
 	rcc_periph_clock_enable(RCC_GPIOA);
+	rcc_periph_clock_enable(RCC_GPIOB); // LCD
 
 	if (!gpio_get(GPIOA, GPIO10)) {
 		/* Boot the application if it's valid. */
@@ -263,6 +276,24 @@ int main(void)
 
 	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &dev, &config, usb_strings, 4, usbd_control_buffer, sizeof(usbd_control_buffer));
 	usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
+
+	// We are using a 16x2 LCD, second line starting on address 0x40.
+	// These settings are optional but enable smart functions.
+	lcd_chars = 16;
+	lcd_lines = 2;
+	uint8_t addresses[] = {0x40};
+	lcd_line_addresses = addresses;
+
+	// Initial stuff
+	lcd_setup();
+	lcd_reset();
+	lcd_display_settings(1, 1, 1);
+
+	delay_ms(40);
+
+  lcd_clear();
+  lcd_clear();
+  lcd_print("DFU Update mode\nConnect to USB ");
 
 	while (1)
 		usbd_poll(usbd_dev);
