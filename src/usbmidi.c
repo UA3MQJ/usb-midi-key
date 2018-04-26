@@ -286,8 +286,8 @@ static const struct usb_config_descriptor config = {
 
 static const char * usb_strings[] = {
 	"vk.com/fpga_synth",
-	"VitaSound.Controller-01",
-	"VSCTRL000001\0"
+	"VitaSound.AnfisaOrgan-00", // TODO: replace to real serial number
+	"VSANFISA0000\0"            // TODO: replace to real serial number
 };
 
 /* Buffer to be used for control requests. */
